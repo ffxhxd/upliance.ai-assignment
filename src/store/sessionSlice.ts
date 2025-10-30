@@ -23,7 +23,7 @@ const sessionSlice = createSlice({
         stepRemainingSec: 0,
         overallRemainingSec: totalDurationSec,
         lastTickTs: Date.now(),
-        isCompleted: false
+        isSessionComplete: false  // NEW: Track completion explicitly
       };
     },
 
@@ -35,13 +35,13 @@ const sessionSlice = createSlice({
         session.currentStepIndex = stepIndex;
         session.stepRemainingSec = stepDurationSec;
         session.lastTickTs = Date.now();
-        session.isCompleted = false;
+        session.isSessionComplete = false;
       }
     },
 
     playSession: (state, action: PayloadAction<string>) => {
       const session = state.byRecipeId[action.payload];
-      if (session && !session.isCompleted) {
+      if (session && !session.isSessionComplete) {
         session.isRunning = true;
         session.lastTickTs = Date.now();
       }
@@ -57,7 +57,7 @@ const sessionSlice = createSlice({
     tickSession: (state, action: PayloadAction<string>) => {
       const session = state.byRecipeId[action.payload];
       
-      if (session && session.isRunning && !session.isCompleted) {
+      if (session && session.isRunning && !session.isSessionComplete) {
         const now = Date.now();
         const elapsed = Math.floor((now - (session.lastTickTs || now)) / 1000);
         
@@ -73,18 +73,55 @@ const sessionSlice = createSlice({
       const { recipeId, nextStepDurationSec } = action.payload;
       const session = state.byRecipeId[recipeId];
       
-      if (session && !session.isCompleted) {
+      if (session && !session.isSessionComplete) {
         session.currentStepIndex += 1;
         session.stepRemainingSec = nextStepDurationSec;
+        session.isRunning = true;
         session.lastTickTs = Date.now();
       }
     },
 
-    markSessionComplete: (state, action: PayloadAction<string>) => {
+    // CRITICAL FIX: Handles STOP button correctly
+    stopCurrentStep: (state, action: PayloadAction<{ 
+      recipeId: string;
+      isLastStep: boolean;
+      nextStepDurationSec?: number;
+      totalRemainingAfterStop?: number;
+    }>) => {
+      const { 
+        recipeId, 
+        isLastStep, 
+        nextStepDurationSec, 
+        totalRemainingAfterStop 
+      } = action.payload;
+      
+      const session = state.byRecipeId[recipeId];
+      if (!session || session.isSessionComplete) return;
+      
+      session.isRunning = false;
+      
+      if (isLastStep) {
+        // Last step STOP → Mark session as complete
+        session.isSessionComplete = true;
+        session.currentStepIndex += 1;  // Move past last index
+        session.stepRemainingSec = 0;
+        session.overallRemainingSec = 0;
+      } else {
+        // Not last step → Auto-advance immediately
+        session.currentStepIndex += 1;
+        session.stepRemainingSec = nextStepDurationSec || 0;
+        session.overallRemainingSec = totalRemainingAfterStop || 0;
+        session.isRunning = true;
+        session.lastTickTs = Date.now();
+      }
+    },
+
+    // CRITICAL FIX: Ends session completely
+    completeSession: (state, action: PayloadAction<string>) => {
       const session = state.byRecipeId[action.payload];
       if (session) {
+        session.isSessionComplete = true;
         session.isRunning = false;
-        session.isCompleted = true;
       }
     },
 
@@ -103,10 +140,6 @@ export const selectActiveSession = (state: RootState) => {
   return activeRecipeId ? byRecipeId[activeRecipeId] : null;
 };
 
-export const selectSessionByRecipeId = (recipeId: string) => (state: RootState) => {
-  return state.session.byRecipeId[recipeId];
-};
-
 export const {
   startSession,
   setCurrentStep,
@@ -114,7 +147,8 @@ export const {
   pauseSession,
   tickSession,
   nextStep,
-  markSessionComplete,
+  stopCurrentStep,
+  completeSession,
   endSession
 } = sessionSlice.actions;
 

@@ -28,10 +28,10 @@ import {
   Inventory,
 } from '@mui/icons-material';
 import FlatwareIcon from '@mui/icons-material/Flatware';
-import { type Recipe } from '../types/recipe.types';
+import {type Recipe } from '../types/recipe.types';
 import { toggleFavorite, deleteRecipe } from '../store/recipesSlice';
 import { addNotification } from '../store/notificationSlice';
-import { type RootState } from '../store';
+import {type RootState } from '../store';
 
 interface RecipeCardProps {
   recipe: Recipe;
@@ -49,10 +49,9 @@ export const RecipeCard: React.FC<RecipeCardProps> = ({ recipe, onEdit }) => {
     return state.session.byRecipeId[activeRecipeId] || null;
   });
 
-  const isCurrentlyActive = activeRecipeId === recipe.id && !session?.isCompleted;
+  const isCurrentlyActive = activeRecipeId === recipe.id && !session?.isSessionComplete;
 
   const totalMinutes = recipe.steps.reduce((sum, step) => sum + step.durationMinutes, 0);
-
   const handleFavoriteClick = () => {
     dispatch(toggleFavorite(recipe.id));
   };

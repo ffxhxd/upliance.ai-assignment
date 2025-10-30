@@ -41,7 +41,7 @@ export interface SessionState {
     stepRemainingSec: number;
     overallRemainingSec: number;
     lastTickTs?: number;
-    isCompleted?: boolean;
+    isSessionComplete?: boolean; 
   }>;
 }
 

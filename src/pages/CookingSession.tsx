@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSelector, useDispatch } from 'react-redux';
 import {
@@ -12,18 +12,17 @@ import {
   LinearProgress,
   Alert,
   Chip,
-  Divider
+  Divider,
+  CircularProgress
 } from '@mui/material';
 import {
   PlayArrow,
   Pause,
-  SkipNext,
+  Stop,
   Close,
-  CheckCircle,
   Schedule,
   Thermostat,
-  Speed,
-  Refresh
+  Speed
 } from '@mui/icons-material';
 import { type RootState } from '../store';
 import {
@@ -31,9 +30,10 @@ import {
   setCurrentStep,
   playSession,
   pauseSession,
+  stopCurrentStep,
   nextStep,
+  completeSession,
   endSession,
-  markSessionComplete,
   selectActiveSession
 } from '../store/sessionSlice';
 import { addNotification } from '../store/notificationSlice';
@@ -45,6 +45,11 @@ export const CookingSession: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useDispatch();
 
+  // Prevent double-click issues
+  const isProcessingStopRef = useRef(false);
+  const hasInitializedRef = useRef(false);
+  const hasAutoAdvancedRef = useRef(false);  // NEW: Prevent double auto-advance
+
   const recipe = useSelector((state: RootState) => 
     state.recipes.recipes.find(r => r.id === id)
   );
@@ -54,11 +59,11 @@ export const CookingSession: React.FC = () => {
 
   useTimer(activeRecipeId, session?.isRunning || false);
 
-  // Redirect if trying to access different recipe while another is active
+  // Redirect if different recipe is cooking
   useEffect(() => {
-    if (activeRecipeId && activeRecipeId !== id && session && !session.isCompleted) {
+    if (activeRecipeId && activeRecipeId !== id && session) {
       dispatch(addNotification({
-        message: `⚠️ Another recipe is already cooking. Redirecting...`,
+        message: `⚠️ Another recipe is cooking. Redirecting...`,
         severity: 'warning',
         autoHideDuration: 3000
       }));
@@ -68,11 +73,15 @@ export const CookingSession: React.FC = () => {
     }
   }, [activeRecipeId, id, session, navigate, dispatch]);
 
-  // Initialize session on mount
+  // Initialize session ONCE - CRITICAL FIX
   useEffect(() => {
-    if (!recipe) return;
+    if (!recipe || hasInitializedRef.current) return;
+    
+    hasInitializedRef.current = true;
 
-    if (activeRecipeId !== recipe.id) {
+    const isFirstTime = !session || activeRecipeId !== recipe.id;
+
+    if (isFirstTime) {
       const totalDurationSec = recipe.steps.reduce(
         (sum, step) => sum + step.durationMinutes * 60,
         0
@@ -86,53 +95,68 @@ export const CookingSession: React.FC = () => {
           stepIndex: 0,
           stepDurationSec: recipe.steps[0].durationMinutes * 60
         }));
-        
-        setTimeout(() => {
-          dispatch(playSession(recipe.id));
-          dispatch(addNotification({
-            message: '🎯 Cooking started! Follow the steps below.',
-            severity: 'info',
-            autoHideDuration: 3000
-          }));
-        }, 300);
       }
     }
-  }, [recipe, activeRecipeId, dispatch]);
+  }, [recipe?.id, dispatch]);
 
-  // Auto-advance to next step when timer reaches 0
+  // CRITICAL FIX: Auto-play IMMEDIATELY after init
   useEffect(() => {
-    if (!session || !recipe || session.isCompleted) return;
+    if (!session || !recipe) return;
 
-    if (session.stepRemainingSec === 0 && session.isRunning) {
+    // Only play if initialized but not running yet
+    if (!session.isRunning && session.currentStepIndex === 0 && session.stepRemainingSec > 0) {
+      dispatch(playSession(recipe.id));
+      dispatch(addNotification({
+        message: '🎯 Cooking started!',
+        severity: 'info',
+        autoHideDuration: 3000
+      }));
+    }
+  }, [session?.currentStepIndex, recipe?.id, dispatch]);
+
+  // CRITICAL FIX: Auto-advance on natural step completion - SEPARATE effect
+  useEffect(() => {
+    if (!session || !recipe || session.isSessionComplete || isProcessingStopRef.current) return;
+
+    // Only auto-advance once per step completion
+    if (session.stepRemainingSec === 0 && session.isRunning && !hasAutoAdvancedRef.current) {
+      hasAutoAdvancedRef.current = true;
+
       const nextIndex = session.currentStepIndex + 1;
 
       if (nextIndex < recipe.steps.length) {
+        // More steps remain - auto-advance
+        dispatch(nextStep({
+          recipeId: recipe.id,
+          nextStepDurationSec: recipe.steps[nextIndex].durationMinutes * 60
+        }));
+        
         dispatch(addNotification({
-          message: `✅ Step ${session.currentStepIndex + 1} completed! Moving to step ${nextIndex + 1}...`,
+          message: `✅ Step ${session.currentStepIndex + 1} completed!`,
+          severity: 'success',
+          autoHideDuration: 2000
+        }));
+
+        // Reset for next step
+        setTimeout(() => {
+          hasAutoAdvancedRef.current = false;
+        }, 100);
+      } else {
+        // Final step naturally completed - session ends
+        dispatch(completeSession(recipe.id));
+        dispatch(addNotification({
+          message: '🎉 Recipe complete!',
           severity: 'success',
           autoHideDuration: 4000
         }));
-
-        dispatch(pauseSession(recipe.id));
-        
-        setTimeout(() => {
-          dispatch(nextStep({
-            recipeId: recipe.id,
-            nextStepDurationSec: recipe.steps[nextIndex].durationMinutes * 60
-          }));
-          dispatch(playSession(recipe.id));
-        }, 500);
-      } else {
-        // Mark as completed
-        dispatch(markSessionComplete(recipe.id));
-        dispatch(addNotification({
-          message: '🎉 All steps completed! Your dish is ready to serve!',
-          severity: 'success',
-          autoHideDuration: 5000
-        }));
       }
     }
-  }, [session?.stepRemainingSec, session?.isRunning, session?.currentStepIndex, session?.isCompleted, recipe, dispatch]);
+
+    // Reset flag if timer is still running (hasn't reached 0 yet)
+    if (session.stepRemainingSec > 0) {
+      hasAutoAdvancedRef.current = false;
+    }
+  }, [session?.stepRemainingSec, session?.isRunning, session?.currentStepIndex, session?.isSessionComplete, recipe, dispatch]);
 
   if (!recipe) {
     return (
@@ -150,93 +174,109 @@ export const CookingSession: React.FC = () => {
   if (!session) {
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
-        <Typography>Loading session...</Typography>
+        <Typography>Loading...</Typography>
       </Container>
     );
   }
 
-  const currentStep = recipe.steps[session.currentStepIndex];
-  const isLastStep = session.currentStepIndex === recipe.steps.length - 1;
-  const allStepsComplete = session.isCompleted || session.currentStepIndex >= recipe.steps.length;
+  const totalSteps = recipe.steps.length;
+  const isSessionComplete = session.isSessionComplete === true;
+  
+  // CRITICAL: Safety check - don't access step if session complete
+  const currentStep = !isSessionComplete && session.currentStepIndex < totalSteps 
+    ? recipe.steps[session.currentStepIndex] 
+    : null;
+
+  const totalDurationSec = recipe.steps.reduce((sum, s) => sum + s.durationMinutes * 60, 0);
+  
+  // Calculate per-step progress (only if current step exists)
+  const stepDurationSec = (currentStep?.durationMinutes ?? 0) * 60;
+  const stepElapsedSec = stepDurationSec > 0 
+    ? Math.max(0, stepDurationSec - session.stepRemainingSec) 
+    : 0;
+  const stepProgressPercent = stepDurationSec > 0 
+    ? Math.round((stepElapsedSec / stepDurationSec) * 100) 
+    : 0;
+
+  // Calculate overall progress
+  const overallElapsedSec = totalDurationSec - session.overallRemainingSec;
+  const overallProgressPercent = totalDurationSec > 0
+    ? Math.round((overallElapsedSec / totalDurationSec) * 100) 
+    : 100;
 
   const handlePlayPause = () => {
+    if (isSessionComplete) return;
+    
     if (session.isRunning) {
       dispatch(pauseSession(recipe.id));
       dispatch(addNotification({
-        message: '⏸️ Cooking paused',
-        severity: 'warning',
-        autoHideDuration: 2000
+        message: '⏸️ Paused',
+        severity: 'info',
+        autoHideDuration: 1500
       }));
     } else {
       dispatch(playSession(recipe.id));
       dispatch(addNotification({
-        message: '▶️ Cooking resumed',
+        message: '▶️ Resumed',
         severity: 'info',
-        autoHideDuration: 2000
+        autoHideDuration: 1500
       }));
     }
   };
 
-  const handleNext = () => {
-    const nextIndex = session.currentStepIndex + 1;
-    if (nextIndex < recipe.steps.length) {
-      dispatch(addNotification({
-        message: `⏭️ Skipped to step ${nextIndex + 1}`,
-        severity: 'info',
-        autoHideDuration: 2000
-      }));
-      
-      dispatch(nextStep({
-        recipeId: recipe.id,
-        nextStepDurationSec: recipe.steps[nextIndex].durationMinutes * 60
-      }));
-    }
-  };
+  const handleStop = () => {
+    // GUARD: Prevent multiple stops
+    if (isProcessingStopRef.current || isSessionComplete) return;
+    isProcessingStopRef.current = true;
 
-  const handleCloseSession = () => {
-    dispatch(pauseSession(recipe.id));
-    dispatch(addNotification({
-      message: '⏸️ Cooking paused - Resume anytime from the recipes list',
-      severity: 'info',
-      autoHideDuration: 2500
-    }));
-    setTimeout(() => {
-      navigate('/recipes');
-    }, 500);
-  };
+    try {
+      const isLastStep = session.currentStepIndex >= totalSteps - 1;
 
-  const handleRestartCookingFromCompletion = () => {
-    dispatch(endSession(recipe.id));
-    
-    setTimeout(() => {
-      const totalDurationSec = recipe.steps.reduce(
-        (sum, step) => sum + step.durationMinutes * 60,
-        0
-      );
-
-      dispatch(startSession({ recipeId: recipe.id, totalDurationSec }));
-      
-      if (recipe.steps.length > 0) {
-        dispatch(setCurrentStep({
+      if (isLastStep) {
+        // Last step - STOP ends session
+        dispatch(stopCurrentStep({
           recipeId: recipe.id,
-          stepIndex: 0,
-          stepDurationSec: recipe.steps[0].durationMinutes * 60
+          isLastStep: true
         }));
+
+        dispatch(addNotification({
+          message: `🛑 Final step ended. Recipe complete!`,
+          severity: 'success',
+          autoHideDuration: 3000
+        }));
+      } else {
+        // Not last step - STOP and auto-advance
+        const nextIndex = session.currentStepIndex + 1;
+        const nextStepDurationSec = recipe.steps[nextIndex].durationMinutes * 60;
         
-        setTimeout(() => {
-          dispatch(playSession(recipe.id));
-          dispatch(addNotification({
-            message: '🔄 Cooking restarted from the beginning!',
-            severity: 'info',
-            autoHideDuration: 3000
-          }));
-        }, 300);
+        const remainingAfterNextStep = recipe.steps
+          .slice(nextIndex + 1)
+          .reduce((sum, s) => sum + s.durationMinutes * 60, 0);
+        
+        const totalRemainingAfterStop = nextStepDurationSec + remainingAfterNextStep;
+
+        dispatch(stopCurrentStep({
+          recipeId: recipe.id,
+          isLastStep: false,
+          nextStepDurationSec,
+          totalRemainingAfterStop
+        }));
+
+        dispatch(addNotification({
+          message: `⏭️ Step ${session.currentStepIndex + 1} ended. Starting step ${nextIndex + 1}...`,
+          severity: 'info',
+          autoHideDuration: 2000
+        }));
       }
-    }, 100);
+    } finally {
+      // Reset guard after 500ms
+      setTimeout(() => {
+        isProcessingStopRef.current = false;
+      }, 500);
+    }
   };
 
-  const handleCompleteAndEnd = () => {
-    dispatch(pauseSession(recipe.id));
+  const handleClose = () => {
     navigate('/recipes');
   };
 
@@ -246,191 +286,202 @@ export const CookingSession: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const totalSteps = recipe.steps.length;
-  const completedSteps = allStepsComplete ? totalSteps : session.currentStepIndex + (session.stepRemainingSec === 0 ? 1 : 0);
-  const progressPercent = (completedSteps / totalSteps) * 100;
-
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
+      {/* Header */}
       <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
           <Typography variant="h5" fontWeight="bold">
             {recipe.title}
           </Typography>
-          <IconButton 
-            onClick={handleCloseSession} 
-            color="default"
-            aria-label="Minimize session"
-            title="Pause and return to recipes list"
-          >
+          <IconButton onClick={handleClose} color="default" aria-label="Close">
             <Close />
           </IconButton>
         </Stack>
 
+        <Stack direction="row" spacing={1} mb={2}>
+          <Chip
+            label={recipe.difficulty}
+            color={
+              recipe.difficulty === 'Easy' ? 'success' :
+              recipe.difficulty === 'Medium' ? 'warning' : 'error'
+            }
+            size="small"
+          />
+          <Chip
+            icon={<Schedule />}
+            label={`${Math.ceil(totalDurationSec / 60)} min`}
+            size="small"
+            variant="outlined"
+          />
+        </Stack>
+
+        {/* Overall Progress */}
         <Box mb={2}>
           <Stack direction="row" justifyContent="space-between" mb={1}>
             <Typography variant="body2" color="text.secondary">
-              Step {Math.min(completedSteps, totalSteps)} of {totalSteps}
+              Overall: {formatTime(session.overallRemainingSec)} remaining
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {Math.round(progressPercent)}% Complete
+              {overallProgressPercent}%
             </Typography>
           </Stack>
-          <LinearProgress 
-            variant="determinate" 
-            value={progressPercent} 
+          <LinearProgress
+            variant="determinate"
+            value={Math.min(overallProgressPercent, 100)}
             sx={{ height: 8, borderRadius: 4 }}
           />
         </Box>
-
-        {!allStepsComplete && (
-          <Chip
-            icon={<Schedule />}
-            label={`${formatTime(session.overallRemainingSec)} remaining`}
-            color="primary"
-            variant="outlined"
-          />
-        )}
       </Paper>
 
-      {allStepsComplete ? (
+      {/* Completion Screen */}
+      {isSessionComplete ? (
         <Paper elevation={2} sx={{ p: 4, textAlign: 'center', bgcolor: 'success.50' }}>
-          <CheckCircle sx={{ fontSize: 80, color: 'success.main', mb: 2 }} />
-          <Typography variant="h4" gutterBottom fontWeight="bold">
-            Cooking Complete!
+          <Typography variant="h4" fontWeight="bold" mb={2}>
+            ✅ Recipe Complete!
           </Typography>
           <Typography variant="body1" color="text.secondary" mb={3}>
-            Your {recipe.title} is ready to serve. Enjoy your meal!
+            {recipe.title} is ready! All steps completed.
           </Typography>
-          <Stack direction="row" spacing={2} justifyContent="center">
-            <Button
-              variant="contained"
-              color="success"
-              size="large"
-              startIcon={<Refresh />}
-              onClick={handleRestartCookingFromCompletion}
-            >
-              Cook Again
-            </Button>
-            <Button
-              variant="outlined"
-              size="large"
-              onClick={handleCompleteAndEnd}
-            >
-              Back to Recipes
-            </Button>
+          <Button
+            variant="contained"
+            size="large"
+            onClick={() => {
+              dispatch(endSession(recipe.id));
+              navigate('/recipes');
+            }}
+          >
+            Back to Recipes
+          </Button>
+        </Paper>
+      ) : currentStep ? (
+        // Active cooking step
+        <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
+          <Stack spacing={2}>
+            {/* Step Header */}
+            <Box>
+              <Typography variant="h6" fontWeight="bold" gutterBottom>
+                Step {session.currentStepIndex + 1} of {totalSteps}
+              </Typography>
+              <Typography variant="body1">{currentStep.description}</Typography>
+            </Box>
+
+            <Divider />
+
+            {/* Per-Step Circular Progress */}
+            <Box sx={{ textAlign: 'center', py: 2 }}>
+              <Box sx={{ position: 'relative', width: 180, height: 180, mx: 'auto', mb: 2 }}>
+                <CircularProgress
+                  variant="determinate"
+                  value={stepProgressPercent}
+                  size={180}
+                  thickness={4}
+                  sx={{
+                    color: session.stepRemainingSec < 60 ? '#f44336' : '#1976d2'
+                  }}
+                />
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    bottom: 0,
+                    right: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <Typography variant="h4" fontWeight="bold">
+                    {formatTime(session.stepRemainingSec)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {stepProgressPercent}%
+                  </Typography>
+                </Box>
+              </Box>
+            </Box>
+
+            {/* Context Chips */}
+            {currentStep.type === 'cooking' && currentStep.cookingSettings && (
+              <Stack direction="row" spacing={2} sx={{ bgcolor: 'info.50', p: 2, borderRadius: 1 }}>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Thermostat color="error" />
+                  <Typography variant="body2">
+                    {currentStep.cookingSettings.temperature}°C
+                  </Typography>
+                </Stack>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Speed color="primary" />
+                  <Typography variant="body2">
+                    Speed {currentStep.cookingSettings.speed}
+                  </Typography>
+                </Stack>
+              </Stack>
+            )}
+
+            {currentStep.type === 'instruction' && currentStep.ingredientIds && (
+              <Box sx={{ bgcolor: 'success.50', p: 2, borderRadius: 1 }}>
+                <Typography variant="body2" color="text.secondary" fontWeight="bold" mb={1}>
+                  Required Ingredients:
+                </Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  {currentStep.ingredientIds.map(ingId => {
+                    const ingredient = recipe.ingredients.find(i => i.id === ingId);
+                    return ingredient ? (
+                      <Chip
+                        key={ingId}
+                        label={`${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`}
+                        size="small"
+                        variant="outlined"
+                      />
+                    ) : null;
+                  })}
+                </Stack>
+              </Box>
+            )}
+
+            {/* Controls */}
+            <Stack direction="row" spacing={2} justifyContent="center">
+              <IconButton
+                onClick={handlePlayPause}
+                color="primary"
+                size="large"
+                sx={{
+                  bgcolor: 'primary.main',
+                  color: 'white',
+                  '&:hover': { bgcolor: 'primary.dark' },
+                  width: 64,
+                  height: 64
+                }}
+                aria-label={session.isRunning ? 'Pause' : 'Play'}
+              >
+                {session.isRunning ? <Pause fontSize="large" /> : <PlayArrow fontSize="large" />}
+              </IconButton>
+
+              <Button
+                variant="contained"
+                color="error"
+                startIcon={<Stop />}
+                size="large"
+                onClick={handleStop}
+                disabled={isProcessingStopRef.current}
+              >
+                STOP
+              </Button>
+            </Stack>
           </Stack>
         </Paper>
-      ) : (
-        <>
-          <Paper elevation={2} sx={{ p: 3, mb: 3 }}>
-            <Stack spacing={2}>
-              <Box>
-                <Chip
-                  label={currentStep.type === 'cooking' ? 'Cooking Step' : 'Instruction Step'}
-                  color={currentStep.type === 'cooking' ? 'success' : 'info'}
-                  size="small"
-                  sx={{ mb: 1 }}
-                />
-                <Typography variant="h6" fontWeight="bold">
-                  Step {session.currentStepIndex + 1}
-                </Typography>
-              </Box>
+      ) : null}
 
-              <Typography variant="body1" sx={{ fontSize: '1.1rem' }}>
-                {currentStep.description}
-              </Typography>
-
-              <Divider />
-
-              {currentStep.type === 'cooking' && currentStep.cookingSettings && (
-                <Stack direction="row" spacing={3}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Thermostat color="error" />
-                    <Typography variant="body2">
-                      {currentStep.cookingSettings.temperature}°C
-                    </Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Speed color="primary" />
-                    <Typography variant="body2">
-                      Speed {currentStep.cookingSettings.speed}
-                    </Typography>
-                  </Box>
-                </Stack>
-              )}
-
-              {currentStep.type === 'instruction' && currentStep.ingredientIds && (
-                <Box>
-                  <Typography variant="body2" color="text.secondary" gutterBottom>
-                    Required Ingredients:
-                  </Typography>
-                  <Stack direction="row" spacing={1} flexWrap="wrap">
-                    {currentStep.ingredientIds.map(ingId => {
-                      const ingredient = recipe.ingredients.find(i => i.id === ingId);
-                      return ingredient ? (
-                        <Chip
-                          key={ingId}
-                          label={`${ingredient.name} (${ingredient.quantity} ${ingredient.unit})`}
-                          size="small"
-                          variant="outlined"
-                        />
-                      ) : null;
-                    })}
-                  </Stack>
-                </Box>
-              )}
-
-              <Box sx={{ textAlign: 'center', py: 2 }}>
-                <Typography 
-                  variant="h2" 
-                  fontWeight="bold"
-                  color={session.stepRemainingSec < 60 ? 'error.main' : 'primary.main'}
-                >
-                  {formatTime(session.stepRemainingSec)}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Time Remaining
-                </Typography>
-              </Box>
-
-              <Stack direction="row" spacing={2} justifyContent="center">
-                <IconButton
-                  onClick={handlePlayPause}
-                  color="primary"
-                  size="large"
-                  sx={{
-                    bgcolor: 'primary.main',
-                    color: 'white',
-                    '&:hover': { bgcolor: 'primary.dark' },
-                    width: 64,
-                    height: 64
-                  }}
-                  aria-label={session.isRunning ? 'Pause' : 'Play'}
-                >
-                  {session.isRunning ? <Pause fontSize="large" /> : <PlayArrow fontSize="large" />}
-                </IconButton>
-
-                {!isLastStep && (
-                  <Button
-                    variant="outlined"
-                    startIcon={<SkipNext />}
-                    onClick={handleNext}
-                    size="large"
-                  >
-                    Skip to Next Step
-                  </Button>
-                )}
-              </Stack>
-            </Stack>
-          </Paper>
-
-          <CookingTimeline
-            steps={recipe.steps}
-            currentStepIndex={session.currentStepIndex}
-            ingredients={recipe.ingredients}
-          />
-        </>
+      {/* Timeline */}
+      {!isSessionComplete && currentStep && (
+        <CookingTimeline
+          steps={recipe.steps}
+          currentStepIndex={session.currentStepIndex}
+          ingredients={recipe.ingredients}
+        />
       )}
     </Container>
   );

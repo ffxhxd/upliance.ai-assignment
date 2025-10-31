@@ -48,7 +48,7 @@ export const CookingSession: React.FC = () => {
   // Prevent double-click issues
   const isProcessingStopRef = useRef(false);
   const hasInitializedRef = useRef(false);
-  const hasAutoAdvancedRef = useRef(false);  // NEW: Prevent double auto-advance
+  const hasAutoAdvancedRef = useRef(false);
 
   const recipe = useSelector((state: RootState) => 
     state.recipes.recipes.find(r => r.id === id)
@@ -73,7 +73,6 @@ export const CookingSession: React.FC = () => {
     }
   }, [activeRecipeId, id, session, navigate, dispatch]);
 
-  // Initialize session ONCE - CRITICAL FIX
   useEffect(() => {
     if (!recipe || hasInitializedRef.current) return;
     
@@ -99,11 +98,9 @@ export const CookingSession: React.FC = () => {
     }
   }, [recipe?.id, dispatch]);
 
-  // CRITICAL FIX: Auto-play IMMEDIATELY after init
   useEffect(() => {
     if (!session || !recipe) return;
 
-    // Only play if initialized but not running yet
     if (!session.isRunning && session.currentStepIndex === 0 && session.stepRemainingSec > 0) {
       dispatch(playSession(recipe.id));
       dispatch(addNotification({
@@ -114,18 +111,15 @@ export const CookingSession: React.FC = () => {
     }
   }, [session?.currentStepIndex, recipe?.id, dispatch]);
 
-  // CRITICAL FIX: Auto-advance on natural step completion - SEPARATE effect
   useEffect(() => {
     if (!session || !recipe || session.isSessionComplete || isProcessingStopRef.current) return;
 
-    // Only auto-advance once per step completion
     if (session.stepRemainingSec === 0 && session.isRunning && !hasAutoAdvancedRef.current) {
       hasAutoAdvancedRef.current = true;
 
       const nextIndex = session.currentStepIndex + 1;
 
       if (nextIndex < recipe.steps.length) {
-        // More steps remain - auto-advance
         dispatch(nextStep({
           recipeId: recipe.id,
           nextStepDurationSec: recipe.steps[nextIndex].durationMinutes * 60
@@ -142,7 +136,6 @@ export const CookingSession: React.FC = () => {
           hasAutoAdvancedRef.current = false;
         }, 100);
       } else {
-        // Final step naturally completed - session ends
         dispatch(completeSession(recipe.id));
         dispatch(addNotification({
           message: '🎉 Recipe complete!',
@@ -152,7 +145,6 @@ export const CookingSession: React.FC = () => {
       }
     }
 
-    // Reset flag if timer is still running (hasn't reached 0 yet)
     if (session.stepRemainingSec > 0) {
       hasAutoAdvancedRef.current = false;
     }
@@ -182,14 +174,12 @@ export const CookingSession: React.FC = () => {
   const totalSteps = recipe.steps.length;
   const isSessionComplete = session.isSessionComplete === true;
   
-  // CRITICAL: Safety check - don't access step if session complete
   const currentStep = !isSessionComplete && session.currentStepIndex < totalSteps 
     ? recipe.steps[session.currentStepIndex] 
     : null;
 
   const totalDurationSec = recipe.steps.reduce((sum, s) => sum + s.durationMinutes * 60, 0);
   
-  // Calculate per-step progress (only if current step exists)
   const stepDurationSec = (currentStep?.durationMinutes ?? 0) * 60;
   const stepElapsedSec = stepDurationSec > 0 
     ? Math.max(0, stepDurationSec - session.stepRemainingSec) 
@@ -198,7 +188,6 @@ export const CookingSession: React.FC = () => {
     ? Math.round((stepElapsedSec / stepDurationSec) * 100) 
     : 0;
 
-  // Calculate overall progress
   const overallElapsedSec = totalDurationSec - session.overallRemainingSec;
   const overallProgressPercent = totalDurationSec > 0
     ? Math.round((overallElapsedSec / totalDurationSec) * 100) 
@@ -225,7 +214,6 @@ export const CookingSession: React.FC = () => {
   };
 
   const handleStop = () => {
-    // GUARD: Prevent multiple stops
     if (isProcessingStopRef.current || isSessionComplete) return;
     isProcessingStopRef.current = true;
 
@@ -233,7 +221,6 @@ export const CookingSession: React.FC = () => {
       const isLastStep = session.currentStepIndex >= totalSteps - 1;
 
       if (isLastStep) {
-        // Last step - STOP ends session
         dispatch(stopCurrentStep({
           recipeId: recipe.id,
           isLastStep: true
@@ -245,7 +232,6 @@ export const CookingSession: React.FC = () => {
           autoHideDuration: 3000
         }));
       } else {
-        // Not last step - STOP and auto-advance
         const nextIndex = session.currentStepIndex + 1;
         const nextStepDurationSec = recipe.steps[nextIndex].durationMinutes * 60;
         

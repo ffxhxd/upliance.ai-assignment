@@ -81,7 +81,6 @@ const sessionSlice = createSlice({
       }
     },
 
-    // CRITICAL FIX: Handles STOP button correctly
     stopCurrentStep: (state, action: PayloadAction<{ 
       recipeId: string;
       isLastStep: boolean;
@@ -103,7 +102,7 @@ const sessionSlice = createSlice({
       if (isLastStep) {
         // Last step STOP → Mark session as complete
         session.isSessionComplete = true;
-        session.currentStepIndex += 1;  // Move past last index
+        session.currentStepIndex += 1; 
         session.stepRemainingSec = 0;
         session.overallRemainingSec = 0;
       } else {
@@ -116,7 +115,6 @@ const sessionSlice = createSlice({
       }
     },
 
-    // CRITICAL FIX: Ends session completely
     completeSession: (state, action: PayloadAction<string>) => {
       const session = state.byRecipeId[action.payload];
       if (session) {

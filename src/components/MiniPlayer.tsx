@@ -44,7 +44,7 @@ export const MiniPlayer: React.FC = () => {
   const isOnCookingPage = location.pathname === `/cook/${activeRecipeId}`;
   const isSessionComplete = session?.isSessionComplete === true;
 
-  // CRITICAL: Hide mini player when session complete OR on cooking page
+  // Hide mini player when session complete OR on cooking page
   if (!session || !recipe || isOnCookingPage || isSessionComplete) {
     return null;
   }

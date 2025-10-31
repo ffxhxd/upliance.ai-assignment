@@ -2,7 +2,7 @@
 
 A React application that allows users to create recipes and cook with guided step-by-step instructions, real-time timers, and automatic progress tracking. The application is built using React.js, Redux Toolkit, and Material-UI.
 
-**Live Demo**: [https://app.netlify.com/projects/ephemeral-brioche-132d5c/overview]
+**Live Demo**: [https://ephemeral-brioche-132d5c.netlify.app/]
 
 ---
 
